@@ -35,10 +35,12 @@ MAX_WORKERS = 4
 REQUEST_TIMEOUT = 120
 USE_LLM_FOR_PDFS = False
 
-PDF_INPUT_DIR = Path("pdfs")
+PDF_INPUT_DIR = Path("pdfs2")
 RAW_OUTPUT_DIR = Path("outputs/raw")
 ALPACA_OUTPUT_DIR = Path("outputs/alpaca")
 OUTPUT_FILE = ALPACA_OUTPUT_DIR / "indian_law_alpaca_200.json"
+
+CASE_NAME_PATTERN = re.compile(r"^sample_case_(\d+)$", re.IGNORECASE)
 
 random.seed(42)
 
@@ -512,6 +514,41 @@ def get_pdf_files(directory=PDF_INPUT_DIR):
     return sorted(unique.values(), key=lambda p: p.name.lower())
 
 
+def extract_case_number(stem):
+    match = CASE_NAME_PATTERN.match(stem or "")
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def get_next_case_index():
+    max_case = 0
+
+    def update_from_stem(stem):
+        nonlocal max_case
+        case_no = extract_case_number(stem)
+        if case_no:
+            max_case = max(max_case, case_no)
+
+    for pdf_dir in [Path("pdfs"), Path("pdfs2")]:
+        if pdf_dir.exists():
+            for pdf_file in get_pdf_files(pdf_dir):
+                update_from_stem(pdf_file.stem)
+
+    if RAW_OUTPUT_DIR.exists():
+        for raw_file in RAW_OUTPUT_DIR.glob("sample_case_*_raw.json"):
+            update_from_stem(raw_file.stem.replace("_raw", ""))
+
+    if ALPACA_OUTPUT_DIR.exists():
+        for alpaca_file in ALPACA_OUTPUT_DIR.glob("sample_case_*.json"):
+            update_from_stem(alpaca_file.stem)
+
+    return max_case + 1
+
+
 def is_valid(entry):
     out = entry["output"]
     required = ["Facts:", "Issues:", "Relevant Law:", "Analysis:", "Conclusion:"]
@@ -663,8 +700,11 @@ def process_pdf_files(pdf_dir=PDF_INPUT_DIR):
     ALPACA_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     output_files = []
+    next_case_index = get_next_case_index()
 
-    for pdf_path in pdf_files:
+    for offset, pdf_path in enumerate(pdf_files):
+        case_number = next_case_index + offset
+        case_stem = f"sample_case_{case_number}"
         logger.info(f"Processing: {pdf_path.name}")
 
         # Extract text from PDF
@@ -675,11 +715,24 @@ def process_pdf_files(pdf_dir=PDF_INPUT_DIR):
 
         try:
             # Save raw extraction for this PDF
-            raw_output_file = RAW_OUTPUT_DIR / f"{pdf_path.stem}_raw.json"
+            target_pdf_path = pdf_path.with_name(f"{case_stem}{pdf_path.suffix.upper()}")
+            source_file_name = pdf_path.name
+            if pdf_path.name.lower() != target_pdf_path.name.lower():
+                if target_pdf_path.exists():
+                    logger.warning(
+                        f"Target PDF name already exists ({target_pdf_path.name}), keeping original source name"
+                    )
+                else:
+                    pdf_path.rename(target_pdf_path)
+                    pdf_path = target_pdf_path
+                    source_file_name = pdf_path.name
+                    logger.info(f"Renamed source PDF to: {source_file_name}")
+
+            raw_output_file = RAW_OUTPUT_DIR / f"{case_stem}_raw.json"
             with open(raw_output_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
-                        "source_file": pdf_path.name,
+                        "source_file": source_file_name,
                         "text": pdf_text,
                     },
                     f,
@@ -688,7 +741,7 @@ def process_pdf_files(pdf_dir=PDF_INPUT_DIR):
                 )
 
             # Create instruction and topic from PDF filename
-            pdf_name = pdf_path.stem
+            pdf_name = case_stem
             case_title = pdf_name.replace('_', ' ')
             case_segments = build_case_segments(pdf_text, segment_count=len(PDF_QUESTION_SETS), max_chars=1500)
 
@@ -725,7 +778,7 @@ def process_pdf_files(pdf_dir=PDF_INPUT_DIR):
                 dataset.append(entry)
 
             # Save alpaca json file with same name as PDF
-            alpaca_file = ALPACA_OUTPUT_DIR / f"{pdf_path.stem}.json"
+            alpaca_file = ALPACA_OUTPUT_DIR / f"{case_stem}.json"
             with open(alpaca_file, "w", encoding="utf-8") as f:
                 json.dump(dataset, f, indent=4, ensure_ascii=False)
 
