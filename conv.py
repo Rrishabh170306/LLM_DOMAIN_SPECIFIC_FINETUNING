@@ -533,18 +533,20 @@ def get_next_case_index():
         if case_no:
             max_case = max(max_case, case_no)
 
-    for pdf_dir in [Path("pdfs"), Path("pdfs2")]:
-        if pdf_dir.exists():
-            for pdf_file in get_pdf_files(pdf_dir):
-                update_from_stem(pdf_file.stem)
+    # Scan all known sample_case artifacts so numbering remains continuous
+    # even when older batches are moved into segregated folders.
+    workspace_root = Path(".")
 
-    if RAW_OUTPUT_DIR.exists():
-        for raw_file in RAW_OUTPUT_DIR.glob("sample_case_*_raw.json"):
-            update_from_stem(raw_file.stem.replace("_raw", ""))
+    for pdf_file in workspace_root.rglob("sample_case_*.PDF"):
+        update_from_stem(pdf_file.stem)
+    for pdf_file in workspace_root.rglob("sample_case_*.pdf"):
+        update_from_stem(pdf_file.stem)
 
-    if ALPACA_OUTPUT_DIR.exists():
-        for alpaca_file in ALPACA_OUTPUT_DIR.glob("sample_case_*.json"):
-            update_from_stem(alpaca_file.stem)
+    for raw_file in workspace_root.rglob("sample_case_*_raw.json"):
+        update_from_stem(raw_file.stem.replace("_raw", ""))
+
+    for alpaca_file in workspace_root.rglob("sample_case_*.json"):
+        update_from_stem(alpaca_file.stem)
 
     return max_case + 1
 
